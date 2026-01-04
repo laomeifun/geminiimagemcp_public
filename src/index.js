@@ -382,8 +382,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 - 制作插图、图标、艺术作品
 
 返回说明：
-- 默认保存图片到本地并返回文件路径（推荐，节省 token）
-- 设置 output="image" 可直接返回图片数据
+- 默认会保存图片到本地并返回文件路径，同时返回图片数据供直接展示
+- 设置 output="image" 则只返回图片数据不保存文件
 
 提示词技巧：prompt 越详细效果越好，建议包含：主体、风格、颜色、构图、光线等`,
       inputSchema: {
@@ -406,7 +406,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           output: {
             type: "string",
-            description: "返回格式。默认 'path'（保存文件返回路径）。设为 'image' 返回图片数据（会消耗较多 token）",
+            description: "返回格式。默认 'path'（保存文件+返回路径+展示图片）。设为 'image' 只返回图片数据不保存文件",
           },
           outDir: {
             type: "string",
@@ -534,14 +534,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       errors.forEach((e) => resultLines.push(e));
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: resultLines.join("\n"),
-        },
-      ],
-    };
+    // 构建返回内容：先放文本说明，再放图片（让 LLM 客户端能自动展示）
+    const content = [
+      {
+        type: "text",
+        text: resultLines.join("\n"),
+      },
+    ];
+    
+    // 无论 output 是什么，都附带图片数据，让客户端可以直接展示
+    // 如果用户明确只要路径（output=path），也附带图片以便展示
+    // 如果用户要 image，则只返回图片不保存（已在上面处理）
+    for (const img of images) {
+      if (img.base64 && typeof img.base64 === "string") {
+        content.push({
+          type: "image",
+          mimeType: img.mimeType || "image/png",
+          data: img.base64,
+        });
+      }
+    }
+
+    return { content };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     // 提供更友好的错误信息和建议
