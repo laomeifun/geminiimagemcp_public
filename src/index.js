@@ -526,15 +526,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // 构建结构化返回
     const resultLines = [];
     if (saved.length > 0) {
-      resultLines.push(`✅ 成功生成 ${saved.length} 张图片：`);
-      saved.forEach((p) => resultLines.push(toDisplayPath(p)));
+      resultLines.push(`✅ 成功生成 ${saved.length} 张图片：\n`);
+      // 使用 Markdown 图片语法，让支持的客户端可以直接渲染
+      saved.forEach((p) => {
+        const displayPath = toDisplayPath(p);
+        // file:// URI 格式，兼容大多数 Markdown 渲染器
+        const fileUri = `file:///${displayPath.replace(/^\//, '')}`;
+        resultLines.push(`![${path.basename(p)}](${fileUri})`);
+        resultLines.push(`📁 ${displayPath}\n`);
+      });
     }
     if (errors.length > 0) {
-      resultLines.push(`\n⚠️ 部分失败：`);
+      resultLines.push(`⚠️ 部分失败：`);
       errors.forEach((e) => resultLines.push(e));
     }
 
-    // 构建返回内容：先放文本说明，再放图片（让 LLM 客户端能自动展示）
+    // 构建返回内容
     const content = [
       {
         type: "text",
@@ -542,32 +549,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       },
     ];
     
-    // 智能判断是否附带图片数据：
-    // - 小图片（< 1MB base64）：附带图片数据，客户端可直接展示
-    // - 大图片（≥ 1MB base64）：只返回路径，避免 token 爆炸
-    // 可通过环境变量 OPENAI_IMAGE_INLINE_MAX_SIZE 调整阈值（单位：字节，默认 1MB）
-    const inlineMaxSize = parseIntOr(process.env.OPENAI_IMAGE_INLINE_MAX_SIZE, 1024 * 1024);
+    // 智能判断是否附带图片数据（作为备选，某些客户端可能不支持 file:// URI）：
+    // - 小图片（< 阈值）：附带图片数据，确保能展示
+    // - 大图片（≥ 阈值）：只用 Markdown 路径，避免 token 爆炸
+    // 可通过环境变量 OPENAI_IMAGE_INLINE_MAX_SIZE 调整阈值（单位：字节，默认 512KB）
+    // 设为 0 可完全禁用 base64 内联，只使用 Markdown 路径
+    const inlineMaxSize = parseIntOr(process.env.OPENAI_IMAGE_INLINE_MAX_SIZE, 512 * 1024);
     
-    let skippedLargeImages = 0;
-    for (const img of images) {
-      if (img.base64 && typeof img.base64 === "string") {
-        // base64 字符串长度约等于原始字节数 * 1.37，这里用字符串长度近似判断
-        const estimatedSize = img.base64.length * 0.75; // base64 解码后的实际大小
-        if (estimatedSize <= inlineMaxSize) {
-          content.push({
-            type: "image",
-            mimeType: img.mimeType || "image/png",
-            data: img.base64,
-          });
-        } else {
-          skippedLargeImages++;
+    if (inlineMaxSize > 0) {
+      for (const img of images) {
+        if (img.base64 && typeof img.base64 === "string") {
+          const estimatedSize = img.base64.length * 0.75;
+          if (estimatedSize <= inlineMaxSize) {
+            content.push({
+              type: "image",
+              mimeType: img.mimeType || "image/png",
+              data: img.base64,
+            });
+          }
         }
       }
-    }
-    
-    // 如果有大图片被跳过，提示用户
-    if (skippedLargeImages > 0) {
-      content[0].text += `\n\n💡 ${skippedLargeImages} 张图片因体积过大（>${Math.round(inlineMaxSize / 1024)}KB）未内联展示，请通过上述路径查看`;
     }
 
     return { content };
