@@ -12,6 +12,11 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     
+    # 使用 Trusted Publishing 需要的权限
+    permissions:
+      contents: read
+      id-token: write
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,12 +50,12 @@ jobs:
             echo "should_publish=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Publish to npm
+      - name: Publish to npm (Trusted Publishing)
         if: steps.version-check.outputs.should_publish == 'true'
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Skip publish (version unchanged)
         if: steps.version-check.outputs.should_publish == 'false'
-        run: echo "Skipping publish - version ${{ steps.version-check.outputs.local_version }} already exists on npm"
+        run: echo "Skipping publish - version already exists on npm"
