@@ -88,6 +88,36 @@ function extFromMime(mimeType) {
   }
 }
 
+async function getDefaultPicturesDir() {
+  const home = os.homedir();
+  
+  // Windows & macOS: 默认 ~/Pictures
+  if (process.platform === "win32" || process.platform === "darwin") {
+    return path.join(home, "Pictures");
+  }
+  
+  // Linux: 尝试读取 XDG 配置
+  try {
+    const configPath = path.join(home, ".config", "user-dirs.dirs");
+    const content = await fs.readFile(configPath, "utf-8");
+    const match = content.match(/^XDG_PICTURES_DIR="?([^"\n]+)"?$/m);
+    if (match) {
+      let dir = match[1];
+      // 处理 $HOME 变量
+      if (dir.startsWith("$HOME/")) {
+        dir = path.join(home, dir.slice(6));
+      } else if (dir === "$HOME") {
+        dir = home;
+      }
+      return dir;
+    }
+  } catch (e) {
+    // 忽略读取错误，回退到默认
+  }
+  
+  return path.join(home, "Pictures");
+}
+
 function resolveOutDir(rawOutDir) {
   let outDir = String(rawOutDir ?? "").trim();
   
@@ -412,7 +442,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           outDir: {
             type: "string",
-            description: "保存目录（必填）。指定图片保存的目录路径，支持绝对路径、相对路径或 ~ 开头的用户目录路径。如果是 Alam 客户端，请优先保存在当前工作目录下",
+            description: "保存目录。指定图片保存的目录路径，支持绝对路径、相对路径或 ~ 开头的用户目录路径。如果不指定，默认保存到用户图片目录（Windows/macOS: ~/Pictures, Linux: XDG_PICTURES_DIR）。如果是 Alam 客户端（提示词中有提及），请优先保存在当前工作目录下",
           },
         },
       },
@@ -458,9 +488,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const output = ["image", "base64", "b64", "data", "inline"].includes(outputRaw) ? "image" : "path";
   
   // 宽松解析 outDir：支持多种参数命名风格
-  const outDir = resolveOutDir(
+  let outDir = resolveOutDir(
     args.outDir ?? args.out_dir ?? args.outdir ?? args.output_dir ?? process.env.OPENAI_IMAGE_OUT_DIR
   );
+  
+  // 如果未指定 outDir，且 output=path，则使用默认图片目录
+  if (output === "path" && !outDir) {
+    outDir = await getDefaultPicturesDir();
+  }
   
   // output=path 模式下，outDir 是必填的
   if (output === "path" && !outDir) {
@@ -506,7 +541,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    await fs.mkdir(outDir, { recursive: true });
+    // 权限检查与回退逻辑
+    let finalOutDir = outDir;
+    let warningMsg = "";
+    
+    try {
+      await fs.mkdir(finalOutDir, { recursive: true });
+      // 尝试写入测试以确保有权限（mkdir 可能成功但无写入权限）
+      await fs.access(finalOutDir, fs.constants.W_OK);
+    } catch (err) {
+      const tmpDir = os.tmpdir();
+      debugLog(`[local] 目录 ${finalOutDir} 无法写入 (${err.message})，回退到临时目录: ${tmpDir}`);
+      warningMsg = `⚠️ 原定目录 "${toDisplayPath(finalOutDir)}" 无法写入，已自动保存到临时目录。\n`;
+      finalOutDir = tmpDir;
+      // 确保临时目录存在
+      await fs.mkdir(finalOutDir, { recursive: true });
+    }
+
     const batchId = `${formatDateForFilename(new Date())}-${crypto.randomBytes(4).toString("hex")}`;
     const saved = [];
     const errors = [];
@@ -514,7 +565,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     for (let i = 0; i < images.length; i += 1) {
       const img = images[i];
       const ext = extFromMime(img.mimeType);
-      const filePath = path.join(outDir, `image-${batchId}-${i + 1}.${ext}`);
+      const filePath = path.join(finalOutDir, `image-${batchId}-${i + 1}.${ext}`);
       
       try {
         // 验证 base64 有效性
@@ -534,10 +585,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    debugLog(`[local] 已保存 ${saved.length} 张图片到 ${outDir}`);
+    debugLog(`[local] 已保存 ${saved.length} 张图片到 ${finalOutDir}`);
     
     // 构建结构化返回
     const resultLines = [];
+    if (warningMsg) {
+      resultLines.push(warningMsg);
+    }
     if (saved.length > 0) {
       resultLines.push(`✅ 成功生成 ${saved.length} 张图片：\n`);
       // 使用 Markdown 图片语法，让支持的客户端可以直接渲染
