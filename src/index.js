@@ -412,7 +412,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           outDir: {
             type: "string",
-            description: "保存目录（必填）。指定图片保存的目录路径，支持绝对路径、相对路径或 ~ 开头的用户目录路径",
+            description: "保存目录（必填）。指定图片保存的目录路径，支持绝对路径、相对路径或 ~ 开头的用户目录路径。如果是 Alam 客户端，请优先保存在当前工作目录下",
           },
         },
       },
