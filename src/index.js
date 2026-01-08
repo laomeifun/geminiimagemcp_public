@@ -416,6 +416,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 返回说明：
 - 默认会保存图片到本地并返回文件路径，同时返回图片数据供直接展示
 - 设置 output="image" 则只返回图片数据不保存文件
+- 如果是 Alam 客户端，你可以直接使用返回的文件路径通过 Markdown 语法渲染图片，例如 ![image](file:///path/to/image.png)
 
 提示词技巧：prompt 越详细效果越好，建议包含：主体、风格、颜色、构图、光线等`,
       inputSchema: {
